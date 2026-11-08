@@ -10,14 +10,15 @@
 <body>
 <header class="site-head">
   <div class="wrap">
+    <p class="kicker">MORTALITY ATLAS · 1950–2025 · UN WPP2024 · 人口普查表 6-1</p>
     <h1>死亡人口图谱 <span class="en">Mortality Atlas</span></h1>
-    <p class="sub">历年分年龄、分性别死亡人口变化 · 1950–2025 · 全球 / 国家 / 中国省级普查点</p>
+    <p class="sub">历年分年龄、分性别死亡人口变化 · 全球 / 国家 / 中国省级普查点</p>
   </div>
 </header>
 
 <main class="wrap">
   <!-- controls -->
-  <section class="controls card">
+  <section class="controls panel">
     <div class="ctl-row">
       <div class="ctl-group">
         <label class="ctl-label">范围</label>
@@ -43,7 +44,7 @@
   </section>
 
   <!-- year + pyramid -->
-  <section class="card stage">
+  <section class="panel stage">
     <div class="year-row">
       <div class="year-big"><span id="yearBig">2000</span><span class="badge" id="yearBadge">UN 估计</span></div>
       <div class="play-ctl">
@@ -62,19 +63,24 @@
     <div class="slider-marks"><span>1950</span><span>1975</span><span>2000</span><span>2025</span></div>
 
     <div class="pyramid-head">
-      <span class="side male">◀ 男性 Male</span>
+      <span class="side male">男性 Male</span>
       <span class="axis-title">年龄组</span>
-      <span class="side female">女性 Female ▶</span>
+      <span class="side female">女性 Female</span>
     </div>
-    <div id="pyramid" class="pyramid"></div>
-    <div class="scale-note" id="scaleNote"></div>
+    <div class="pyr-chart" id="pyrChart">
+      <div class="axis-row" id="axisTop"><div class="acell m"></div><div class="acell age"></div><div class="acell f"></div></div>
+      <div id="pyramid" class="pyramid"></div>
+      <div class="axis-row" id="axisBottom"><div class="acell m"></div><div class="acell age"></div><div class="acell f"></div></div>
+    </div>
+    <p class="scale-note" id="scaleNote"></p>
+    <p class="scale-note">女∶男 ＝ 该年龄组女性死亡数 ÷ 男性死亡数 × 100（男＝100，保留 1 位小数），标注于女性侧数值之后；该比值恒按死亡人数计算，与当前指标无关。男＝0 时记为 —。</p>
   </section>
 
   <!-- stats -->
   <section class="stats" id="stats"></section>
 
   <!-- trends -->
-  <section class="card trends" id="trendCard">
+  <section class="panel trends" id="trendCard">
     <h2>历年趋势 <span class="hint">点击折线可跳转年份</span></h2>
     <div class="trend-grid">
       <figure>
@@ -88,11 +94,30 @@
     </div>
   </section>
 
+  <!-- multi-region comparison -->
+  <section class="panel compare" id="compareCard">
+    <h2>多地区对比 <span class="hint">与主图同年份、同指标的小金字塔 · 最多勾选 6 个</span></h2>
+    <div class="cmp-picker">
+      <div class="cmp-group">
+        <span class="cmp-glabel">国家 / 全球</span>
+        <div class="cmp-checks" id="cmpCountries"></div>
+      </div>
+      <div class="cmp-group">
+        <span class="cmp-glabel">中国省级（仅 2000 / 2010 普查年）</span>
+        <div class="cmp-checks" id="cmpProvinces"></div>
+      </div>
+      <p class="cmp-hint" id="cmpHint"></p>
+    </div>
+    <div class="cmp-grid" id="cmpGrid"></div>
+    <p class="cmp-empty" id="cmpEmpty" style="display:none">未勾选任何地区。请在上方勾选至少一个地区进行对比。</p>
+    <p class="note">小图各自独立标尺，满格值注于各图下方，跨图比较请以满格值为准。省级小图在非普查年显示最近普查年数据，图题中标注实际数据年份，不做插值。</p>
+  </section>
+
   <!-- detail table -->
-  <section class="card detail">
+  <section class="panel detail">
     <div class="detail-head">
       <h2>明细数据 · <span id="detailTitle"></span></h2>
-      <button id="csvBtn">⬇ 下载当前视图 CSV</button>
+      <button id="csvBtn">下载当前视图 CSV</button>
     </div>
     <div class="table-scroll">
       <table id="detailTable">
@@ -102,6 +127,7 @@
             <th class="num col-count">男·死亡人数</th>
             <th class="num col-count">女·死亡人数</th>
             <th class="num col-count">合计·死亡人数</th>
+            <th class="num col-ratio">女∶男（男＝100）</th>
             <th class="num col-share">男·占比 %</th>
             <th class="num col-share">女·占比 %</th>
             <th class="num col-share">合计·占比 %</th>
@@ -118,13 +144,14 @@
   </section>
 
   <!-- methods -->
-  <section class="card methods">
+  <section class="panel methods">
     <h2>方法与来源</h2>
     <ul>
       <li><strong>国家级主源</strong>：UN《World Population Prospects 2024》（联合国人口司），分单岁、分性别死亡数与人口数（Medium 口径），本项目聚合为 22 个年龄组（0、1–4、5–9、…、95–99、100+）。许可 CC BY 3.0 IGO。1950–2023 为 UN <em>估计</em>，2024–2025 为 UN <em>中位预测</em>，页面已分别打徽标。</li>
       <li><strong>交叉验证</strong>：UN 为平滑/校正后的估计值，与各国登记终值有系统性差异——美国 ±2% 内（2023 年 −3.7%）、日本 +1.3%～+4.2%、中国 −7.8%～+5.3%（对照 CDC/NCHS、厚生劳动省人口动态统计、国家统计局公布数）；两套国际估计（UN 与 IHME GBD）之间本身亦有 6–9% 分歧。明细表数字请按「UN 统一口径估计」理解。</li>
       <li><strong>死亡占比</strong>：某年龄组死亡数 ÷ 当年该地区总死亡数。它近似反映「在当年死亡的人中，死于该年龄的比例」，<em>约等于</em>同批人活到该年龄后的条件死亡分布，但不等于按出生队列计算的死亡概率。</li>
       <li><strong>死亡率</strong>：某年龄组死亡数 ÷ 同年龄组年中人口 ×1000（‰），为年龄别死亡率。</li>
+      <li><strong>女∶男比值</strong>：某年龄组女性死亡数 ÷ 男性死亡数 ×100（男＝100）。恒以死亡人数计算，在占比 / 死亡率视图下不变。</li>
       <li><strong>省级（诚实说明）</strong>：中国省级<em>逐年</em>分年龄、分性别死亡人数并无公开连续序列——省级统计年鉴只公布总死亡人数与粗死亡率。仅人口普查年份有官方年龄别数据。本页省级模式收录国家统计局第五次（2000）、第六次（2010）人口普查表 6-1 的 8 个省份实测值，登记期为上年 11 月 1 日至当年 10 月 31 日；2020 年同类数据在《中国人口普查年鉴-2020》表 6-1（纸质/CNKI），未取得公开可机读版本，故未收录。省级无分年龄人口数，因此不提供死亡率指标。</li>
       <li><strong>死亡中位年龄</strong>：由当年死亡年龄分布线性插值求得（100+ 组按 5 岁组距处理），为分布中位点，非平均寿命。</li>
     </ul>

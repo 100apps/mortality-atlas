@@ -101,6 +101,58 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   check("上海 2000 total = 94,927", doc.querySelectorAll(".stat .v")[0].textContent === "94,927",
     doc.querySelectorAll(".stat .v")[0].textContent);
 
+  // ---- v2: redesign + sex ratio + comparison ----
+  doc.querySelector('#modeSeg button[data-mode="country"]').click();
+  await sleep(200);
+  slider.value = "2000";
+  slider.dispatchEvent(new window.Event("input", { bubbles: true }));
+  const rows2 = doc.querySelectorAll(".prow");
+  check("v2 female labels = 22 with 女∶男", [...rows2].every((r) => r.querySelector(".val.f").textContent.includes("女∶男")),
+    rows2[21].querySelector(".val.f").textContent);
+  check("v2 male labels = 22 non-empty", [...rows2].every((r) => r.querySelector(".val.m").textContent.trim() !== ""));
+  check("v2 WLD 2000 age0 ratio = 84.7 (3333484/3933364)", rows2[21].querySelector(".val.f").textContent.includes("84.7"),
+    rows2[21].querySelector(".val.f").textContent);
+  check("v2 labels inside pyramid container", [...doc.querySelectorAll(".val")].every((v) => v.closest("#pyramid") && !/calc\(100%/.test(v.style.left + v.style.right)));
+  check("v2 axis ticks present top+bottom", doc.querySelectorAll("#axisTop .tick").length >= 5 && doc.querySelectorAll("#axisBottom .tick").length >= 5,
+    "top=" + doc.querySelectorAll("#axisTop .tick").length);
+  check("v2 axis max tick labelled 800万", [...doc.querySelectorAll("#axisTop .tick")].some((t) => t.textContent.includes("800")),
+    [...doc.querySelectorAll("#axisTop .tick")].map((t) => t.textContent).join("/"));
+  const mTicks = [...doc.querySelectorAll("#axisTop .acell.m .tick")].map((t) => t.style.right);
+  const fTicks = [...doc.querySelectorAll("#axisTop .acell.f .tick")].map((t) => t.style.left);
+  check("v2 axis ticks symmetric L/R", JSON.stringify(mTicks) === JSON.stringify(fTicks), mTicks.join(","));
+  check("v2 all labels within chart subtree", [...doc.querySelectorAll(".val")].every((v) => v.closest(".pyr-chart") && v.closest(".bar-wrap")));
+
+  const ths = doc.querySelectorAll("#detailTable thead th");
+  check("v2 table has 女∶男 column", ths[4].textContent.includes("女∶男"), ths[4].textContent);
+  const firstRowCells = doc.querySelectorAll("#detailTable tbody tr")[0].querySelectorAll("td");
+  check("v2 table age0 ratio cell = 84.7", firstRowCells[4].textContent === "84.7", firstRowCells[4].textContent);
+
+  // CSV export carries the ratio column
+  let csvText = "";
+  const OrigBlob = window.Blob;
+  window.Blob = function (parts, opts) { csvText = parts.join(""); return new OrigBlob(parts, opts); };
+  doc.querySelector("#csvBtn").click();
+  window.Blob = OrigBlob;
+  check("v2 CSV header has ratio col", csvText.includes("female_male_ratio_male100"));
+  check("v2 CSV age0 ratio = 84.75", csvText.split("\n")[1].includes("84.75"), (csvText.split("\n")[1] || "").slice(0, 60));
+
+  // comparison small multiples
+  check("v2 compare default = 3 minis", doc.querySelectorAll(".mini-chart").length === 3, "got " + doc.querySelectorAll(".mini-chart").length);
+  const miniNames = [...doc.querySelectorAll(".mini-name")].map((e) => e.textContent).join(" ");
+  check("v2 compare defaults CHN/USA/JPN", miniNames.includes("中国") && miniNames.includes("美国") && miniNames.includes("日本"), miniNames);
+  const chnMini = doc.querySelector('.mini-chart[data-key="CHN"] .mini-meta');
+  check("v2 CHN mini 2000 total", chnMini.textContent.includes("7,780,050"), chnMini.textContent);
+  slider.value = "2010";
+  slider.dispatchEvent(new window.Event("input", { bubbles: true }));
+  const chnMini2 = doc.querySelector('.mini-chart[data-key="CHN"] .mini-meta');
+  check("v2 minis sync on year change (CHN 2010)", chnMini2.textContent.includes("8,788,796"), chnMini2.textContent);
+  const unchecked = [...doc.querySelectorAll("#cmpCountries input:not(:checked)")];
+  for (let k = 0; k < 4; k++) unchecked[k].click();
+  check("v2 compare capped at 6", doc.querySelectorAll(".mini-chart").length === 6, "got " + doc.querySelectorAll(".mini-chart").length);
+  check("v2 cap hint shown", doc.querySelector("#cmpHint").textContent.includes("最多"), doc.querySelector("#cmpHint").textContent);
+  for (const inp of [...doc.querySelectorAll(".cmp-checks input:checked")]) inp.click();
+  check("v2 compare empty state", doc.querySelectorAll(".mini-chart").length === 0 && doc.querySelector("#cmpEmpty").style.display !== "none");
+
   check("no window errors", errors.length === 0, errors.join(" | "));
   const failed = results.filter((r) => !r[1]).length;
   console.log(`\nDOM TEST: ${results.length - failed}/${results.length} passed`);

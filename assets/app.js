@@ -8,6 +8,7 @@ const AGE_START = [0,1,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,1
 const AGE_SPAN  = [1,4,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5]; // 100+ treated as 5 for median interpolation
 const YEARS = []; for (let y = 1950; y <= 2025; y++) YEARS.push(y);
 const PROV_YEARS = [2000, 2010];
+const CMP_MAX = 6;
 
 const state = {
   mode: "country",          // country | province
@@ -19,13 +20,19 @@ const state = {
   timer: null,
   data: null,               // data.json payload
   prov: null,               // provinces.json payload
-  scaleMax: { count: 1, share: 1, rate: 1 },
+  scaleMax: { count: 1, share: 1, rate: 1 },   // nice (axis) max per metric
+  tickStep: { count: 1, share: 1, rate: 1 },
+  compare: ["CHN", "USA", "JPN"],              // region codes or "P:<province>"
 };
 
 const $ = (s) => document.querySelector(s);
 const fmtInt = (n) => Math.round(n).toLocaleString("en-US");
 const fmtPct = (n) => n.toFixed(2);
 const fmtRate = (n) => n.toFixed(1);
+const trimNum = (v) => String(parseFloat(v.toFixed(2)));
+/* female:male ratio (male = 100, 1 decimal), always from death counts */
+const sexRatio = (f, m) => (m > 0 ? (f / m) * 100 : null);
+const fmtRatio = (f, m) => { const r = sexRatio(f, m); return r == null ? "—" : r.toFixed(1); };
 
 /* ---------- data loading (fetch, file:// fallback via script tag) ---------- */
 function loadScript(src) {
@@ -61,39 +68,56 @@ function currentArrays() {
   const rec = regionObj().years[String(state.year)];
   return { m: rec[0], f: rec[1], pm: rec[2], pf: rec[3] };
 }
-function metricValue(arrs, sex, i) {
+function metricValueFor(arrs, metric, sex, i) {
   const deaths = sex === "m" ? arrs.m[i] : arrs.f[i];
-  if (state.metric === "count") return deaths;
-  if (state.metric === "share") {
+  if (metric === "count") return deaths;
+  if (metric === "share") {
     const total = arrs.m.reduce((a, b) => a + b, 0) + arrs.f.reduce((a, b) => a + b, 0);
     return total ? (deaths / total) * 100 : 0;
   }
-  // rate per mille
   const pop = sex === "m" ? arrs.pm[i] : arrs.pf[i];
   return pop ? (deaths / pop) * 1000 : 0;
+}
+function metricValue(arrs, sex, i) { return metricValueFor(arrs, state.metric, sex, i); }
+
+/* nice axis scale: step from 1/2/2.5/3/5/10 × 10^k, ~5 steps (e.g. share 14.95 -> step 3, max 15) */
+function niceScale(max) {
+  if (!(max > 0)) return { max: 1, step: 1 };
+  const raw = max / 5, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const c of [1, 2, 2.5, 3, 5, 10]) {
+    const step = c * mag;
+    if (step >= raw) return { max: Math.ceil(max / step) * step, step };
+  }
+  const step = 10 * mag;
+  return { max: Math.ceil(max / step) * step, step };
+}
+function rawMaxFor(metric, mode, regionKey) {
+  let mx = 0;
+  if (mode === "province") {
+    if (metric === "rate") return 0;
+    for (const y of PROV_YEARS) {
+      const d = state.prov.provinces[regionKey][String(y)];
+      if (!d) continue;
+      const arrs = { m: d.m, f: d.f, pm: null, pf: null };
+      for (let i = 0; i < 22; i++) mx = Math.max(mx, metricValueFor(arrs, metric, "m", i), metricValueFor(arrs, metric, "f", i));
+    }
+    return mx;
+  }
+  const reg = state.data.regions.find((r) => r.code === regionKey);
+  for (const y of YEARS) {
+    const rec = reg.years[String(y)];
+    const arrs = { m: rec[0], f: rec[1], pm: rec[2], pf: rec[3] };
+    for (let i = 0; i < 22; i++) mx = Math.max(mx, metricValueFor(arrs, metric, "m", i), metricValueFor(arrs, metric, "f", i));
+  }
+  return mx;
 }
 function computeScale() {
   // fixed scale per region+mode across all its years, so animation is comparable
   for (const metric of ["count", "share", "rate"]) {
-    let mx = 0;
-    const saved = state.metric; state.metric = metric;
-    if (state.mode === "province") {
-      if (metric === "rate") { state.scaleMax[metric] = 1; state.metric = saved; continue; }
-      for (const y of PROV_YEARS) {
-        const d = state.prov.provinces[state.region][String(y)];
-        const arrs = { m: d.m, f: d.f, pm: null, pf: null };
-        for (let i = 0; i < 22; i++) mx = Math.max(mx, metricValue(arrs, "m", i), metricValue(arrs, "f", i));
-      }
-    } else {
-      const reg = regionObj();
-      for (const y of YEARS) {
-        const rec = reg.years[String(y)];
-        const arrs = { m: rec[0], f: rec[1], pm: rec[2], pf: rec[3] };
-        for (let i = 0; i < 22; i++) mx = Math.max(mx, metricValue(arrs, "m", i), metricValue(arrs, "f", i));
-      }
-    }
-    state.scaleMax[metric] = mx || 1;
-    state.metric = saved;
+    const key = state.mode === "province" ? state.region : state.region;
+    const nice = niceScale(rawMaxFor(metric, state.mode, key));
+    state.scaleMax[metric] = nice.max;
+    state.tickStep[metric] = nice.step;
   }
 }
 
@@ -137,9 +161,9 @@ function buildPyramid() {
     const row = document.createElement("div");
     row.className = "prow";
     row.innerHTML =
-      `<div class="bar-wrap"><div class="bar m"></div><span class="val m"></span></div>` +
-      `<div class="age">${AGE_LABELS[i]}</div>` +
-      `<div class="bar-wrap"><div class="bar f"></div><span class="val f"></span></div>`;
+      `<div class="bar-wrap m"><div class="bar m"></div><span class="val m"></span></div>` +
+      `<div class="age"><span>${AGE_LABELS[i]}</span></div>` +
+      `<div class="bar-wrap f"><div class="bar f"></div><span class="val f"></span></div>`;
     box.appendChild(row);
   }
 }
@@ -148,26 +172,84 @@ function fmtVal(v) {
   if (state.metric === "share") return fmtPct(v) + "%";
   return fmtRate(v) + "‰";
 }
+function fmtTick(v) {
+  if (state.metric === "count") {
+    if (v >= 1e8) return trimNum(v / 1e8) + "亿";
+    if (v >= 1e4) return trimNum(v / 1e4) + "万";
+    return fmtInt(v);
+  }
+  return trimNum(v);
+}
+function renderAxis() {
+  const max = state.scaleMax[state.metric], step = state.tickStep[state.metric];
+  const unit = state.metric === "share" ? "%" : state.metric === "rate" ? "‰" : "";
+  const ticks = [];
+  for (let v = 0; v <= max + step / 1000; v += step) ticks.push(v);
+  for (const rowId of ["#axisTop", "#axisBottom"]) {
+    const row = $(rowId);
+    const mc = row.querySelector(".acell.m"), fc = row.querySelector(".acell.f"), ac = row.querySelector(".acell.age");
+    mc.innerHTML = ""; fc.innerHTML = ""; ac.innerHTML = "";
+    const zero = document.createElement("span");
+    zero.className = "tick"; zero.style.left = "50%"; zero.textContent = "0";
+    ac.appendChild(zero);
+    for (const v of ticks) {
+      if (v === 0) continue;
+      const d = (v / max) * 100;
+      const label = fmtTick(v) + (v >= max - step / 1000 ? unit : "");
+      const sm = document.createElement("span");
+      sm.className = "tick"; sm.style.right = d + "%"; sm.textContent = label;
+      mc.appendChild(sm);
+      const sf = document.createElement("span");
+      sf.className = "tick"; sf.style.left = d + "%"; sf.textContent = label;
+      fc.appendChild(sf);
+    }
+  }
+  $("#pyramid").style.setProperty("--gs", (step / max) * 100 + "%");
+}
+/* place a value label just outside the bar end; if the bar is long (or the label
+   would leave the chart), tuck it inside the bar end in white instead */
+function placeLabel(lab, pct, side, wrap) {
+  lab.classList.remove("inside");
+  if (side === "m") {
+    lab.style.left = ""; lab.style.right = `calc(${pct}% + 6px)`;
+    if (pct > 74 || lab.offsetLeft < -30) {
+      lab.classList.add("inside");
+      lab.style.right = `calc(${pct}% - 6px)`;
+    }
+  } else {
+    lab.style.right = ""; lab.style.left = `calc(${pct}% + 6px)`;
+    const wrapW = wrap ? wrap.clientWidth : 0;
+    if (pct > 74 || (wrapW && lab.offsetLeft + lab.offsetWidth > wrapW + 30)) {
+      lab.classList.add("inside");
+      lab.style.left = `calc(${pct}% - 6px)`;
+      lab.style.transform = "translate(-100%,-50%)";
+      return;
+    }
+  }
+  lab.style.transform = "translateY(-50%)";
+}
 function renderPyramid() {
   const arrs = currentArrays();
   const max = state.scaleMax[state.metric];
+  renderAxis();
   const rows = $("#pyramid").children;
   for (let r = 0; r < 22; r++) {
     const i = 21 - r;
     const vm = metricValue(arrs, "m", i), vf = metricValue(arrs, "f", i);
     const row = rows[r];
     const bm = row.querySelector(".bar.m"), bf = row.querySelector(".bar.f");
-    bm.style.width = (vm / max) * 100 + "%";
-    bf.style.width = (vf / max) * 100 + "%";
+    const pmPct = (vm / max) * 100, pfPct = (vf / max) * 100;
+    bm.style.width = pmPct + "%";
+    bf.style.width = pfPct + "%";
     const lm = row.querySelector(".val.m"), lf = row.querySelector(".val.f");
     lm.textContent = vm > 0 ? fmtVal(vm) : "";
-    lf.textContent = vf > 0 ? fmtVal(vf) : "";
-    // hide side labels when the bar is nearly full-width to avoid overflow
-    lm.style.visibility = vm / max > 0.82 ? "hidden" : "visible";
-    lf.style.visibility = vf / max > 0.82 ? "hidden" : "visible";
+    lf.innerHTML = vf > 0 || arrs.f[i] > 0
+      ? `${fmtVal(vf)} <span class="ratio">· 女∶男 ${fmtRatio(arrs.f[i], arrs.m[i])}</span>` : "";
+    placeLabel(lm, pmPct, "m", row.querySelector(".bar-wrap.m"));
+    placeLabel(lf, pfPct, "f", row.querySelector(".bar-wrap.f"));
   }
-  const unit = state.metric === "count" ? "人" : state.metric === "share" ? "%（占当年总死亡）" : "‰（每千名同组人口）";
-  $("#scaleNote").textContent = `横轴满格 = ${fmtVal(max)} ${state.metric === "count" ? unit : ""} · 尺度在同一地区内跨年份固定，可直接比较年份变化`;
+  const stepTxt = state.metric === "count" ? fmtTick(state.tickStep[state.metric]) : trimNum(state.tickStep[state.metric]) + (state.metric === "share" ? "%" : "‰");
+  $("#scaleNote").textContent = `横轴满格 = ${fmtVal(max)} · 刻度步进 ${stepTxt} · 尺度在同一地区内跨年份固定，可直接比较年份变化`;
 }
 
 /* ---------- table ---------- */
@@ -185,6 +267,7 @@ function renderTable() {
     const cell = (v, cls) => `<td class="num ${cls}">${v}</td>`;
     html += `<tr><td>${AGE_LABELS[i]}</td>` +
       cell(fmtInt(m[i]), "col-count") + cell(fmtInt(f[i]), "col-count") + cell(fmtInt(t), "col-count") +
+      cell(fmtRatio(f[i], m[i]), "col-ratio") +
       cell(total ? fmtPct((m[i] / total) * 100) : "—", "col-share") +
       cell(total ? fmtPct((f[i] / total) * 100) : "—", "col-share") +
       cell(total ? fmtPct((t / total) * 100) : "—", "col-share") +
@@ -196,6 +279,7 @@ function renderTable() {
   const rtAll = hasPop ? rate(total, pm.reduce((a, b) => a + b, 0) + pf.reduce((a, b) => a + b, 0)) : null;
   $("#detailTable tfoot").innerHTML =
     `<tr><td>合计</td><td class="num">${fmtInt(tm)}</td><td class="num">${fmtInt(tf)}</td><td class="num">${fmtInt(total)}</td>` +
+    `<td class="num">${fmtRatio(tf, tm)}</td>` +
     `<td class="num">${total ? fmtPct((tm / total) * 100) : "—"}</td><td class="num">${total ? fmtPct((tf / total) * 100) : "—"}</td><td class="num">100.00</td>` +
     `<td class="num">${hasPop ? fmtRate(rate(tm, pm.reduce((a, b) => a + b, 0))) : "—"}</td>` +
     `<td class="num">${hasPop ? fmtRate(rate(tf, pf.reduce((a, b) => a + b, 0))) : "—"}</td>` +
@@ -206,18 +290,20 @@ function renderTable() {
   const place = state.mode === "province" ? state.region : regionObj().zh;
   $("#detailTitle").textContent = `${place} · ${state.year} 年`;
   $("#tableNote").textContent = state.mode === "province"
-    ? "省级：普查登记期（上年 11.1–当年 10.31）实测死亡数；无分年龄人口，死亡率列为空。"
-    : (state.year >= 2024 ? "国家级：UN WPP2024 中位预测值。" : "国家级：UN WPP2024 估计值，与各国登记终值略有差异（见页脚）。");
+    ? "省级：普查登记期（上年 11.1–当年 10.31）实测死亡数；无分年龄人口，死亡率列为空。女∶男以死亡人数计（男＝100）。"
+    : (state.year >= 2024 ? "国家级：UN WPP2024 中位预测值。女∶男以死亡人数计（男＝100）。" : "国家级：UN WPP2024 估计值，与各国登记终值略有差异（见页脚）。女∶男以死亡人数计（男＝100）。");
 }
 function downloadCSV() {
   const arrs = currentArrays();
   const { m, f, pm, pf } = arrs;
   const total = m.reduce((a, b) => a + b, 0) + f.reduce((a, b) => a + b, 0);
-  const lines = [["age_group", "male_deaths", "female_deaths", "total_deaths", "male_share_pct", "female_share_pct", "total_share_pct", "male_rate_per_mille", "female_rate_per_mille", "total_rate_per_mille"].join(",")];
+  const lines = [["age_group", "male_deaths", "female_deaths", "total_deaths", "female_male_ratio_male100", "male_share_pct", "female_share_pct", "total_share_pct", "male_rate_per_mille", "female_rate_per_mille", "total_rate_per_mille"].join(",")];
   for (let i = 0; i < 22; i++) {
     const t = m[i] + f[i];
     const r = (d, p) => (p ? ((d / p) * 1000).toFixed(2) : "");
+    const ratio = sexRatio(f[i], m[i]);
     lines.push([AGE_LABELS[i], m[i], f[i], t,
+      ratio == null ? "" : ratio.toFixed(2),
       total ? ((m[i] / total) * 100).toFixed(2) : "", total ? ((f[i] / total) * 100).toFixed(2) : "", total ? ((t / total) * 100).toFixed(2) : "",
       pm ? r(m[i], pm[i]) : "", pm ? r(f[i], pf[i]) : "", pm ? r(t, pm[i] + pf[i]) : ""].join(","));
   }
@@ -228,6 +314,82 @@ function downloadCSV() {
   a.download = `mortality_${name}_${state.year}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+/* ---------- multi-region comparison (small multiples) ---------- */
+function cmpArraysFor(key) {
+  // returns {arrs, usedYear, zh, en, isProv} for the current state.year
+  if (key.startsWith("P:")) {
+    const name = key.slice(2);
+    const usedYear = PROV_YEARS.reduce((a, b) => (Math.abs(b - state.year) < Math.abs(a - state.year) ? b : a));
+    const d = state.prov.provinces[name][String(usedYear)];
+    return { arrs: { m: d.m, f: d.f, pm: null, pf: null }, usedYear, zh: name, en: "", isProv: true };
+  }
+  const reg = state.data.regions.find((r) => r.code === key);
+  const rec = reg.years[String(state.year)];
+  return { arrs: { m: rec[0], f: rec[1], pm: rec[2], pf: rec[3] }, usedYear: state.year, zh: reg.zh, en: reg.en, isProv: false };
+}
+function buildComparePicker() {
+  const cc = $("#cmpCountries"), cp = $("#cmpProvinces");
+  cc.innerHTML = ""; cp.innerHTML = "";
+  const mk = (parent, key, label) => {
+    const lab = document.createElement("label");
+    const inp = document.createElement("input");
+    inp.type = "checkbox"; inp.value = key; inp.checked = state.compare.includes(key);
+    inp.addEventListener("change", () => onCompareToggle(inp));
+    lab.appendChild(inp);
+    lab.appendChild(document.createTextNode(label));
+    parent.appendChild(lab);
+  };
+  for (const r of state.data.regions) mk(cc, r.code, r.zh);
+  for (const p of Object.keys(state.prov.provinces)) mk(cp, "P:" + p, p);
+}
+function onCompareToggle(inp) {
+  const hint = $("#cmpHint");
+  if (inp.checked) {
+    if (state.compare.length >= CMP_MAX) {
+      inp.checked = false;
+      hint.textContent = `最多勾选 ${CMP_MAX} 个地区，请先取消一个再勾选。`;
+      return;
+    }
+    state.compare.push(inp.value);
+  } else {
+    state.compare = state.compare.filter((k) => k !== inp.value);
+  }
+  hint.textContent = "";
+  renderCompare();
+}
+function renderCompare() {
+  const grid = $("#cmpGrid");
+  grid.innerHTML = "";
+  $("#cmpEmpty").style.display = state.compare.length ? "none" : "";
+  for (const key of state.compare) {
+    const { arrs, usedYear, zh, en, isProv } = cmpArraysFor(key);
+    const tm = arrs.m.reduce((a, b) => a + b, 0), tf = arrs.f.reduce((a, b) => a + b, 0);
+    const box = document.createElement("div");
+    box.className = "mini-chart";
+    box.dataset.key = key;
+    let body = "";
+    if (isProv && state.metric === "rate") {
+      body = `<div class="mini-na">省级普查无分年龄人口，无死亡率数据。</div>`;
+    } else {
+      const nice = niceScale(rawMaxFor(state.metric, isProv ? "province" : "country", isProv ? zh : key));
+      let rows = "";
+      for (let i = 21; i >= 0; i--) {
+        const wm = (metricValueFor(arrs, state.metric, "m", i) / nice.max) * 100;
+        const wf = (metricValueFor(arrs, state.metric, "f", i) / nice.max) * 100;
+        rows += `<div class="mrow"><div class="mbar-wrap m"><div class="mbar m" style="width:${wm}%"></div></div>` +
+                `<div class="mbar-wrap f"><div class="mbar f" style="width:${wf}%"></div></div></div>`;
+      }
+      const full = state.metric === "count" ? fmtInt(nice.max) + " 人" : state.metric === "share" ? trimNum(nice.max) + " %" : trimNum(nice.max) + " ‰";
+      body = `<div class="mini-pyr">${rows}</div><div class="mini-scale">满格 = ${full}（本地区独立标尺）</div>`;
+    }
+    box.innerHTML =
+      `<div class="mini-head"><span class="mini-name">${zh}${en ? " " + en : ""}</span>` +
+      `<span class="mini-year">${isProv ? "普查 " + usedYear + " 年" : usedYear + " 年"}</span></div>` +
+      `<div class="mini-meta">总死亡 ${fmtInt(tm + tf)} · 整体女∶男 ${fmtRatio(tf, tm)}</div>` + body;
+    grid.appendChild(box);
+  }
 }
 
 /* ---------- trend charts ---------- */
@@ -244,17 +406,17 @@ function drawTrend(canvas, series, color, fmt) {
   const pad = (mx - mn) * 0.12; mx += pad; mn -= pad;
   const X = (yr) => (8 + ((yr - 1950) / 75) * (W - 16));
   const Y = (v) => (6 + (1 - (v - mn) / (mx - mn)) * (H - 26));
-  ctx.strokeStyle = "#e3e7ec"; ctx.lineWidth = 1;
+  ctx.strokeStyle = "#E9E8E1"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(8, Y(vals[0])); ctx.lineTo(W - 8, Y(vals[0])); ctx.stroke();
   ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.beginPath();
   series.forEach((s, i) => { const x = X(s.y), y = Y(s.v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
   ctx.stroke();
   const cx = X(state.year);
-  ctx.strokeStyle = "#c0392b"; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = "#1A1A18"; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
   ctx.beginPath(); ctx.moveTo(cx, 4); ctx.lineTo(cx, H - 18); ctx.stroke(); ctx.setLineDash([]);
   const cur = series.find((s) => s.y === state.year);
-  if (cur) { ctx.fillStyle = "#c0392b"; ctx.beginPath(); ctx.arc(cx, Y(cur.v), 3, 0, 7); ctx.fill(); }
-  ctx.fillStyle = "#66707d"; ctx.font = "10px " + getComputedStyle(document.body).getPropertyValue("--mono");
+  if (cur) { ctx.fillStyle = "#1A1A18"; ctx.beginPath(); ctx.arc(cx, Y(cur.v), 3, 0, 7); ctx.fill(); }
+  ctx.fillStyle = "#6B6B66"; ctx.font = "10px " + getComputedStyle(document.body).getPropertyValue("--mono");
   ctx.fillText(fmt(mn + pad), 8, H - 5);
   ctx.fillText(fmt(mx - pad), 8, 12);
   ctx.fillText(String(state.year), Math.min(Math.max(cx - 14, 8), W - 40), H - 5);
@@ -276,8 +438,8 @@ function renderTrends() {
     const o = rec[0].slice(14).reduce((a, b) => a + b, 0) + rec[1].slice(14).reduce((a, b) => a + b, 0);
     tot.push({ y, v: t }); old.push({ y, v: t ? (o / t) * 100 : 0 });
   }
-  drawTrend($("#trendTotal"), tot, "#2f6db3", (v) => (v / 10000).toFixed(0) + "万");
-  drawTrend($("#trendOld"), old, "#bf4d68", (v) => v.toFixed(0) + "%");
+  drawTrend($("#trendTotal"), tot, "#3E6FA3", (v) => (v / 10000).toFixed(0) + "万");
+  drawTrend($("#trendOld"), old, "#B5546A", (v) => v.toFixed(0) + "%");
 }
 
 /* ---------- render orchestration ---------- */
@@ -295,7 +457,7 @@ function renderAll() {
   const slider = $("#yearSlider");
   if (document.activeElement !== slider) slider.value = state.year;
   $("#metricDef").textContent = METRIC_DEFS[state.metric];
-  renderStats(); renderPyramid(); renderTable(); renderTrends();
+  renderStats(); renderPyramid(); renderTable(); renderTrends(); renderCompare();
 }
 function setYear(y, fromSlider) {
   if (state.mode === "province") {
@@ -303,7 +465,7 @@ function setYear(y, fromSlider) {
     y = PROV_YEARS.reduce((a, b) => (Math.abs(b - y) < Math.abs(a - y) ? b : a));
   }
   state.year = Math.min(2025, Math.max(1950, y));
-  if (!fromSlider) $("#yearSlider").value = state.year; else $("#yearSlider").value = state.year;
+  $("#yearSlider").value = state.year;
   renderAll();
 }
 function stopPlay() {
@@ -420,6 +582,7 @@ function wire() {
   }
   buildPyramid();
   fillRegions();
+  buildComparePicker();
   computeScale();
   wire();
   renderAll();
